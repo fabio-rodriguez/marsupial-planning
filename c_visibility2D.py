@@ -1,37 +1,6 @@
 
 from tools import *
-
-# 4 for i in C.Length do
-# 5 if Visible(T, C[i]) then
-# 6 ML[i] = δ(T, C[i])
-# 7 MC [i] = T
-# 8 end
-# 9 for i in C.Length do
-# 10 if ML[i] ̸ = ∞ then
-# 11 for j in C.Length do
-# 12 P ← {MC [i], C[i], C[j]}
-# 13 DT,i,j ← ML[i] + δ(C[i], C[j])
-# 14 if Visible(C[i], C[j]) and IsFTT(P)
-# and DT,i,j < ML[j] then
-# 15 ML[j] ← DT,i,j
-# 16 MC [j] ← C[i]
-# 17 end
-# 18 end
-# 19 for i in F.Length do
-# 20 for W in C ∪ {T } do
-# 21 X ← GroundIntersection(W, F[i])
-# 22 P ← {W, F[i], X}
-# 23 if IsFTT(P) and
-# Slope(W, F[i]) > Slope(MF [i], F[i]) then
-# 24 MF [i] ← W
-# 25 end
-# 26 end
-# 27 X ← OpeningBounds(C, ML, O2D )
-# 28 Y ← ClosingBounds(F, MF , O2D ))
-# 29 Y ← CleanClosingPoints(Y, X , MC )
-# 30 L ← (X ∪ Y).SortByXAxis()
-# 31 I ← GetNonCVisIntervals(L)
-# 32 return I
+from geom import *
 
 def c_vis2D(T, L_max, rectangles, visibility_graph):
     ''' We are assuming that all rectangles are to the right of T
@@ -48,14 +17,116 @@ def c_vis2D(T, L_max, rectangles, visibility_graph):
     
     C, F = get_critical_points(T, rectangles)
 
+    ML = {ci:float('inf') for ci in C}  
+    MC = {ci:None for ci in C} 
+    MF = {fi:None for fi in F} 
+    MFX = {fi:None for fi in F} 
+
+    # Initiallize the arrays with ci visibles from T
+    Tpoint = vg.Point(*T) 
+    for edge in visibility_graph.visgraph[vg.Point(*T)]:
+        adj = edge.get_adjacent(Tpoint) 
+        ci = (adj.x, adj.y)
+        if ci in C:
+            ML[ci] = euclidian_dist(ci, T) 
+            MC[ci] = T
+        
+    # Fill ML and MC arrays with the visible ci pairs
     C.sort(key = lambda x : -x[1])
+    for ci in C:
+        if ML[ci] != float('inf'):
+            for edge in visibility_graph.visgraph[vg.Point(*ci)]:
+                adj = edge.get_adjacent(Tpoint) 
+                cj = (adj.x, adj.y)
+                DTj = ML[ci] + euclidian_dist(ci, cj)
+                if cj in C and is_feasible_tight_tether(T, ci, cj) and DTj < ML[cj]:
+                    ML[cj] = DTj
+                    MC[cj] = ci
 
-    ML = [float('inf')] * len(C)
-    MC = [None] * len(C)
-    MF = [None] * len(F)
+    # Fill MF array
+    for fi in F:
+        for ci in C + [T]:
+            X = ground_intersection(ci, fi)
+            if is_feasible_tether(ci, fi, X) \
+                and  vg.Point(*ci) in visibility_graph.find_visible(vg.Point(*X)) \
+                and  slope(ci, fi) < slope(fi, MF[fi]):
+                    MF[fi] = ci
+                    MFX[fi] = X
+
+    # Get the opening bounds
+    opening = []
+    for ci in C:
+        if ML[ci] > Lmax:
+            continue
+
+        X = (math.sqrt((Lmax - ML[ci])**2 - ci[1]**2), 0)
+        if  is_feasible_tight_tether(MC[ci], ci, X) \
+            and vg.Point(*ci) in visibility_graph.find_visible(vg.Point(*X)):
+                opening.append((X, ci))
+
+    # Get and clean the closing bounds
+    closing = []
+    for fi in F:
+        mfi = MF[fi]
+        mfxi = MFX[fi]
+
+        if mfi == None:
+            continue
+
+        for x, ci in opening:
+            invalid = False
+
+            while True:  
+                print(MFX[fi], MF[fi], x, ci)
+                print(doIntersect(vg.Point(*mfxi), vg.Point(*mfi), vg.Point(*x), vg.Point(*ci)))
+                print()
+
+                if doIntersect(vg.Point(*mfxi), vg.Point(*mfi), vg.Point(*x), vg.Point(*ci)):
+                    if mfi == ci:
+                        break
+
+                    invalid = True
+                    break
+
+                if ci[1] >= mfi[1]:
+                    break
+
+                x = ci
+                ci = MC[ci]
+
+            if not invalid:
+                closing.append((mfxi, fi))
 
 
+    # Join boundary pointns and sort them by X axis
+    L = [{"label": "opening", "point": x} for x, _ in opening] + [{"label": "closing", "point": x} for x, _ in closing]
+    L.sort(key=lambda x: x["point"])  
 
+    # Get non c-visible intervals
+    I = []
+    initial = None
+    for point in L:
+        if point["label"] == "opening":
+            initial = point["point"]
+
+        if point["label"] == "closing":
+            I.append((initial, point["point"]))
+            initial = None
+
+
+    # print()
+    # print("C", C)
+    # print("F", F)
+    # print("ML", ML)
+    # print("MC", MC)
+    # print("MF", MF)
+    # print("MFX", MF)
+    # print("opening", opening)
+    # print("closing", closing)
+    # print("L", L)
+    # print("I", I)
+
+    return I
 
 
 
@@ -81,10 +152,25 @@ if __name__ == "__main__":
     T = (0,30)
     Lmax = 50
     rectangles = [
-        [{"vertex": (14.156, 4), "feasible": True},
-        {"vertex": (14.156, 5), "feasible": True},
-        {"vertex": (20, 4), "feasible": True},
-        {"vertex": (20, 5), "feasible": True}],
+        [
+            {"vertex": (10, 3), "feasible": True},
+            {"vertex": (10, 5), "feasible": True},
+            {"vertex": (25, 3), "feasible": True},
+            {"vertex": (25, 5), "feasible": True}
+        ],[
+            {"vertex": (5, 8), "feasible": True},
+            {"vertex": (5, 10), "feasible": True},
+            {"vertex": (15, 8), "feasible": True},
+            {"vertex": (15, 10), "feasible": True}
+        ],
     ]
+    vgraph = get_visibility_graph(T, rectangles)
 
+    # # Plot Scenario
+    vgraph = get_visibility_graph(T, rectangles, plot_graph=True)
     plot_scenario(T, Lmax, rectangles)
+
+    c_vis2D(T, Lmax, rectangles, vgraph)
+
+
+    
